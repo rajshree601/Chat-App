@@ -1,4 +1,4 @@
-const API_URL = 'https://your-api-gateway-url/messages';
+const API_URL = 'https://67f1whow8d.execute-api.us-east-1.amazonaws.com/prod';
 
 document.getElementById('chat-form').addEventListener('submit', async (e) => {
     e.preventDefault();
