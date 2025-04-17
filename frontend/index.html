@@ -1,21 +1,89 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chat App</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chat App</title>
+  <style>
+    /* Basic styling for chat interface */
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4; }
+    .chat-container { width: 80%; max-width: 600px; margin: 20px auto; background-color: #fff; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); }
+    .messages { height: 300px; overflow-y: scroll; border-bottom: 1px solid #ddd; margin-bottom: 20px; padding: 10px; }
+    .message { margin-bottom: 10px; padding: 10px; background-color: #f1f1f1; border-radius: 5px; }
+    .message-user { font-weight: bold; }
+    .input-container { display: flex; gap: 10px; }
+    .message-input { flex-grow: 1; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
+    .send-btn { padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
+    .send-btn:hover { background-color: #0056b3; }
+  </style>
 </head>
 <body>
-    <div id="app">
-        <h1>Chat App</h1>
-        <div id="messages"></div>
-        <form id="chat-form">
-            <input type="text" id="user" placeholder="Your Name" required>
-            <input type="text" id="message" placeholder="Type a message" required>
-            <button type="submit">Send</button>
-        </form>
+
+  <div class="chat-container">
+    <h2>Chat Application</h2>
+    <div class="messages" id="messages"></div>
+    <div class="input-container">
+      <input type="text" id="message-input" class="message-input" placeholder="Type your message...">
+      <button id="send-btn" class="send-btn">Send</button>
     </div>
-    <script src="chat.js"></script>
+  </div>
+
+  <script>
+    const apiUrl = 'https://abc123xyz.execute-api.us-east-1.amazonaws.com/Prod'; // Your API URL
+
+    // Fetch messages from the API
+    function fetchMessages() {
+      fetch(apiUrl)
+        .then(response => response.json())
+        .then(data => {
+          const messagesDiv = document.getElementById('messages');
+          messagesDiv.innerHTML = ''; // Clear existing messages
+          data.forEach(message => {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('message');
+            messageDiv.innerHTML = `<span class="message-user">${message.MessageID}</span>: ${message.Content}`;
+            messagesDiv.appendChild(messageDiv);
+          });
+        })
+        .catch(error => console.error('Error fetching messages:', error));
+    }
+
+    // Send a new message
+    function sendMessage() {
+      const messageInput = document.getElementById('message-input');
+      const messageData = {
+        MessageID: Date.now().toString(),
+        Timestamp: Date.now(),
+        Content: messageInput.value
+      };
+
+      fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(messageData)
+      })
+      .then(response => response.json())
+      .then(data => {
+        console.log('Message sent:', data);
+        messageInput.value = ''; // Clear input field
+        fetchMessages(); // Fetch updated messages
+      })
+      .catch(error => console.error('Error sending message:', error));
+    }
+
+    // Event listeners
+    document.getElementById('send-btn').addEventListener('click', sendMessage);
+    document.getElementById('message-input').addEventListener('keypress', function(e) {
+      if (e.key === 'Enter') {
+        sendMessage();
+      }
+    });
+
+    // Initial fetch for messages
+    fetchMessages();
+  </script>
+
 </body>
 </html>
