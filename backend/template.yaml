@@ -1,0 +1,50 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Resources:
+  SendMessageFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      Handler: send_message.lambda_handler
+      Runtime: python3.12
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: ChatMessages
+      Events:
+        SendMessageAPI:
+          Type: Api
+          Properties:
+            Path: /messages
+            Method: post
+
+  ReceiveMessagesFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      Handler: receive_messages.lambda_handler
+      Runtime: python3.12
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: ChatMessages
+      Events:
+        ReceiveMessagesAPI:
+          Type: Api
+          Properties:
+            Path: /messages
+            Method: get
+
+  ChatMessagesTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      TableName: ChatMessages
+      AttributeDefinitions:
+        - AttributeName: MessageID
+          AttributeType: S
+        - AttributeName: Timestamp
+          AttributeType: N
+      KeySchema:
+        - AttributeName: MessageID
+          KeyType: HASH
+        - AttributeName: Timestamp
+          KeyType: RANGE
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
