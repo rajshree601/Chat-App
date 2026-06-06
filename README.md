@@ -42,6 +42,14 @@ npm run dev --workspace frontend
 
 ## Deployment
 
+If Serverless reports `The security token included in the request is invalid`, refresh the local AWS profile first:
+
+```powershell
+.\scripts\configure-aws-profile.ps1 -Profile default -Region us-east-1
+```
+
+Use an access key from the AWS account you want to deploy into. Leave the session token blank for a normal long-lived access key.
+
 Use the helper script:
 
 ```powershell
