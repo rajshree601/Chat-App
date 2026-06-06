@@ -1,0 +1,596 @@
+service: aws-serverless-realtime-chat-platform
+frameworkVersion: "3"
+
+plugins:
+  - serverless-esbuild
+  - serverless-iam-roles-per-function
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: ${opt:region, "us-east-1"}
+  stage: ${opt:stage, "dev"}
+  logRetentionInDays: 30
+  tracing:
+    lambda: true
+    apiGateway: true
+  httpApi:
+    cors:
+      allowedOrigins:
+        - ${param:corsOrigin, "*"}
+      allowedHeaders:
+        - Content-Type
+        - Authorization
+      allowedMethods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+    authorizers:
+      cognitoJwt:
+        identitySource: $request.header.Authorization
+        issuerUrl:
+          Fn::Sub: https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+        audience:
+          - Ref: UserPoolClient
+  websocketsApiName: ${self:service}-${sls:stage}-ws
+  websocketsApiRouteSelectionExpression: $request.body.action
+  environment:
+    USERS_TABLE: { Ref: UsersTable }
+    CONNECTIONS_TABLE: { Ref: ConnectionsTable }
+    ROOMS_TABLE: { Ref: RoomsTable }
+    MESSAGES_TABLE: { Ref: MessagesTable }
+    REACTIONS_TABLE: { Ref: ReactionsTable }
+    NOTIFICATIONS_TABLE: { Ref: NotificationsTable }
+    MEDIA_BUCKET: { Ref: MediaBucket }
+    MEDIA_CLOUDFRONT_DOMAIN: { Fn::GetAtt: [MediaDistribution, DomainName] }
+    USER_POOL_ID: { Ref: UserPool }
+    USER_POOL_CLIENT_ID: { Ref: UserPoolClient }
+    WEBSOCKET_ENDPOINT:
+      Fn::Sub: https://${WebsocketsApi}.execute-api.${AWS::Region}.amazonaws.com/${sls:stage}
+    CORS_ORIGIN: ${param:corsOrigin, "*"}
+    BEDROCK_MODEL_ID: ${param:bedrockModelId, "anthropic.claude-3-haiku-20240307-v1:0"}
+
+package:
+  individually: false
+  patterns:
+    - ../backend/src/**
+    - ../backend/package.json
+    - "!../frontend/**"
+    - "!../docs/**"
+
+custom:
+  tableBillingMode: PAY_PER_REQUEST
+  esbuild:
+    bundle: true
+    minify: true
+    sourcemap: true
+    target: node20
+    platform: node
+    format: esm
+    outputFileExtension: .mjs
+    packager: npm
+  broadcastRole:
+    - Effect: Allow
+      Action:
+        - dynamodb:Query
+        - dynamodb:DeleteItem
+      Resource:
+        - { Fn::GetAtt: [ConnectionsTable, Arn] }
+        - Fn::Sub: ${ConnectionsTable.Arn}/index/*
+    - Effect: Allow
+      Action: execute-api:ManageConnections
+      Resource:
+        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebsocketsApi}/${sls:stage}/POST/@connections/*
+  messageRole:
+    - Effect: Allow
+      Action: dynamodb:PutItem
+      Resource: { Fn::GetAtt: [MessagesTable, Arn] }
+    - ${self:custom.broadcastRole.0}
+    - ${self:custom.broadcastRole.1}
+  bedrockRole:
+    - Effect: Allow
+      Action: bedrock:InvokeModel
+      Resource:
+        Fn::Sub: arn:aws:bedrock:${AWS::Region}::foundation-model/${param:bedrockModelId, "anthropic.claude-3-haiku-20240307-v1:0"}
+  joinRoomRole:
+    - Effect: Allow
+      Action: dynamodb:UpdateItem
+      Resource:
+        - { Fn::GetAtt: [RoomsTable, Arn] }
+        - { Fn::GetAtt: [ConnectionsTable, Arn] }
+    - ${self:custom.broadcastRole.0}
+    - ${self:custom.broadcastRole.1}
+
+functions:
+  connect:
+    handler: ../backend/src/handlers/connect.handler
+    iamRoleStatementsName: ${sls:stage}-chat-connect-role
+    events:
+      - websocket: $connect
+    iamRoleStatements:
+      - Effect: Allow
+        Action: dynamodb:PutItem
+        Resource: { Fn::GetAtt: [ConnectionsTable, Arn] }
+
+  disconnect:
+    handler: ../backend/src/handlers/disconnect.handler
+    iamRoleStatementsName: ${sls:stage}-chat-disconnect-role
+    events:
+      - websocket: $disconnect
+    iamRoleStatements:
+      - Effect: Allow
+        Action: dynamodb:DeleteItem
+        Resource: { Fn::GetAtt: [ConnectionsTable, Arn] }
+
+  websocketMessage:
+    handler: ../backend/src/handlers/message.websocketMessage
+    iamRoleStatementsName: ${sls:stage}-chat-ws-message-role
+    events:
+      - websocket: joinRoom
+      - websocket: $default
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:UpdateItem
+          - dynamodb:DeleteItem
+          - dynamodb:Query
+        Resource:
+          - { Fn::GetAtt: [ConnectionsTable, Arn] }
+          - Fn::Sub: ${ConnectionsTable.Arn}/index/*
+      - Effect: Allow
+        Action: execute-api:ManageConnections
+        Resource:
+          Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebsocketsApi}/${sls:stage}/POST/@connections/*
+
+  sendMessage:
+    handler: ../backend/src/handlers/message.sendMessage
+    iamRoleStatementsName: ${sls:stage}-chat-send-role
+    events:
+      - httpApi:
+          path: /messages
+          method: POST
+          authorizer: cognitoJwt
+    iamRoleStatements: ${self:custom.messageRole}
+
+  getMessages:
+    handler: ../backend/src/handlers/message.getMessages
+    iamRoleStatementsName: ${sls:stage}-chat-get-messages-role
+    events:
+      - httpApi:
+          path: /rooms/{roomId}/messages
+          method: GET
+          authorizer: cognitoJwt
+    iamRoleStatements:
+      - Effect: Allow
+        Action: dynamodb:Query
+        Resource:
+          - { Fn::GetAtt: [MessagesTable, Arn] }
+          - Fn::Sub: ${MessagesTable.Arn}/index/*
+
+  typingIndicator:
+    handler: ../backend/src/handlers/message.typingIndicator
+    iamRoleStatementsName: ${sls:stage}-chat-typing-role
+    events:
+      - httpApi:
+          path: /typing
+          method: POST
+          authorizer: cognitoJwt
+    iamRoleStatements: ${self:custom.broadcastRole}
+
+  addReaction:
+    handler: ../backend/src/handlers/message.addReaction
+    iamRoleStatementsName: ${sls:stage}-chat-reaction-role
+    events:
+      - httpApi:
+          path: /reactions
+          method: POST
+          authorizer: cognitoJwt
+    iamRoleStatements:
+      - Effect: Allow
+        Action: dynamodb:PutItem
+        Resource: { Fn::GetAtt: [ReactionsTable, Arn] }
+      - ${self:custom.broadcastRole.0}
+      - ${self:custom.broadcastRole.1}
+
+  readReceipt:
+    handler: ../backend/src/handlers/message.readReceipt
+    iamRoleStatementsName: ${sls:stage}-chat-read-role
+    events:
+      - httpApi:
+          path: /read-receipts
+          method: POST
+          authorizer: cognitoJwt
+    iamRoleStatements:
+      - Effect: Allow
+        Action: dynamodb:UpdateItem
+        Resource: { Fn::GetAtt: [MessagesTable, Arn] }
+      - ${self:custom.broadcastRole.0}
+      - ${self:custom.broadcastRole.1}
+
+  createRoom:
+    handler: ../backend/src/handlers/rooms.createRoom
+    iamRoleStatementsName: ${sls:stage}-chat-create-room-role
+    events:
+      - httpApi:
+          path: /rooms
+          method: POST
+          authorizer: cognitoJwt
+    iamRoleStatements:
+      - Effect: Allow
+        Action: dynamodb:PutItem
+        Resource: { Fn::GetAtt: [RoomsTable, Arn] }
+
+  listRooms:
+    handler: ../backend/src/handlers/rooms.listRooms
+    iamRoleStatementsName: ${sls:stage}-chat-list-rooms-role
+    events:
+      - httpApi:
+          path: /rooms
+          method: GET
+          authorizer: cognitoJwt
+    iamRoleStatements:
+      - Effect: Allow
+        Action: dynamodb:Scan
+        Resource: { Fn::GetAtt: [RoomsTable, Arn] }
+
+  joinRoom:
+    handler: ../backend/src/handlers/rooms.joinRoom
+    iamRoleStatementsName: ${sls:stage}-chat-join-room-role
+    events:
+      - httpApi:
+          path: /rooms/join
+          method: POST
+          authorizer: cognitoJwt
+    iamRoleStatements: ${self:custom.joinRoomRole}
+
+  leaveRoom:
+    handler: ../backend/src/handlers/rooms.leaveRoom
+    iamRoleStatementsName: ${sls:stage}-chat-leave-room-role
+    events:
+      - httpApi:
+          path: /rooms/leave
+          method: POST
+          authorizer: cognitoJwt
+    iamRoleStatements: ${self:custom.broadcastRole}
+
+  getUsers:
+    handler: ../backend/src/handlers/rooms.getUsers
+    iamRoleStatementsName: ${sls:stage}-chat-get-users-role
+    events:
+      - httpApi:
+          path: /users
+          method: GET
+          authorizer: cognitoJwt
+    iamRoleStatements:
+      - Effect: Allow
+        Action: dynamodb:Query
+        Resource:
+          - { Fn::GetAtt: [UsersTable, Arn] }
+          - Fn::Sub: ${UsersTable.Arn}/index/*
+
+  updateMe:
+    handler: ../backend/src/handlers/users.updateMe
+    iamRoleStatementsName: ${sls:stage}-chat-update-me-role
+    events:
+      - httpApi:
+          path: /users/me
+          method: PUT
+          authorizer: cognitoJwt
+    iamRoleStatements:
+      - Effect: Allow
+        Action: dynamodb:UpdateItem
+        Resource: { Fn::GetAtt: [UsersTable, Arn] }
+
+  postConfirmation:
+    handler: ../backend/src/handlers/users.postConfirmation
+    iamRoleStatementsName: ${sls:stage}-chat-confirm-role
+    events:
+      - cognitoUserPool:
+          pool: ${self:service}-${sls:stage}-users
+          trigger: PostConfirmation
+          existing: false
+    iamRoleStatements:
+      - Effect: Allow
+        Action: dynamodb:PutItem
+        Resource: { Fn::GetAtt: [UsersTable, Arn] }
+
+  uploadMedia:
+    handler: ../backend/src/handlers/media.uploadMedia
+    iamRoleStatementsName: ${sls:stage}-chat-upload-role
+    events:
+      - httpApi:
+          path: /media/upload
+          method: POST
+          authorizer: cognitoJwt
+    iamRoleStatements:
+      - Effect: Allow
+        Action: s3:PutObject
+        Resource:
+          Fn::Sub: ${MediaBucket.Arn}/*
+
+  smartReplies:
+    handler: ../backend/src/handlers/ai.smartReplies
+    iamRoleStatementsName: ${sls:stage}-chat-ai-replies-role
+    timeout: 20
+    events:
+      - httpApi:
+          path: /ai/replies
+          method: POST
+          authorizer: cognitoJwt
+    iamRoleStatements: ${self:custom.bedrockRole}
+
+  summarize:
+    handler: ../backend/src/handlers/ai.summarize
+    iamRoleStatementsName: ${sls:stage}-chat-ai-summary-role
+    timeout: 20
+    events:
+      - httpApi:
+          path: /ai/summarize
+          method: POST
+          authorizer: cognitoJwt
+    iamRoleStatements: ${self:custom.bedrockRole}
+
+  cleanupConnections:
+    handler: ../backend/src/handlers/maintenance.cleanupConnections
+    iamRoleStatementsName: ${sls:stage}-chat-cleanup-role
+    events:
+      - eventBridge:
+          schedule: rate(15 minutes)
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:Scan
+          - dynamodb:BatchWriteItem
+        Resource: { Fn::GetAtt: [ConnectionsTable, Arn] }
+
+resources:
+  Resources:
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: ${self:custom.tableBillingMode}
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: status
+            AttributeType: S
+          - AttributeName: updatedAt
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: status-updatedAt-index
+            KeySchema:
+              - AttributeName: status
+                KeyType: HASH
+              - AttributeName: updatedAt
+                KeyType: RANGE
+            Projection: { ProjectionType: ALL }
+
+    ConnectionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: ${self:custom.tableBillingMode}
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
+        AttributeDefinitions:
+          - AttributeName: connectionId
+            AttributeType: S
+          - AttributeName: roomId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: connectionId
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: roomId-index
+            KeySchema:
+              - AttributeName: roomId
+                KeyType: HASH
+            Projection: { ProjectionType: ALL }
+
+    RoomsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: ${self:custom.tableBillingMode}
+        AttributeDefinitions:
+          - AttributeName: roomId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: roomId
+            KeyType: HASH
+
+    MessagesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: ${self:custom.tableBillingMode}
+        AttributeDefinitions:
+          - AttributeName: messageId
+            AttributeType: S
+          - AttributeName: roomId
+            AttributeType: S
+          - AttributeName: createdAt
+            AttributeType: S
+        KeySchema:
+          - AttributeName: messageId
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: roomId-createdAt-index
+            KeySchema:
+              - AttributeName: roomId
+                KeyType: HASH
+              - AttributeName: createdAt
+                KeyType: RANGE
+            Projection: { ProjectionType: ALL }
+
+    ReactionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: ${self:custom.tableBillingMode}
+        AttributeDefinitions:
+          - AttributeName: reactionId
+            AttributeType: S
+          - AttributeName: messageId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: reactionId
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: messageId-index
+            KeySchema:
+              - AttributeName: messageId
+                KeyType: HASH
+            Projection: { ProjectionType: ALL }
+
+    NotificationsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: ${self:custom.tableBillingMode}
+        AttributeDefinitions:
+          - AttributeName: notificationId
+            AttributeType: S
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: createdAt
+            AttributeType: S
+        KeySchema:
+          - AttributeName: notificationId
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: userId-createdAt-index
+            KeySchema:
+              - AttributeName: userId
+                KeyType: HASH
+              - AttributeName: createdAt
+                KeyType: RANGE
+            Projection: { ProjectionType: ALL }
+
+    MediaBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+        CorsConfiguration:
+          CorsRules:
+            - AllowedHeaders: ["*"]
+              AllowedMethods: [GET, PUT, POST]
+              AllowedOrigins: ["*"]
+              MaxAge: 3000
+
+    MediaOriginAccessControl:
+      Type: AWS::CloudFront::OriginAccessControl
+      Properties:
+        OriginAccessControlConfig:
+          Name: ${self:service}-${sls:stage}-media-oac
+          OriginAccessControlOriginType: s3
+          SigningBehavior: always
+          SigningProtocol: sigv4
+
+    MediaDistribution:
+      Type: AWS::CloudFront::Distribution
+      Properties:
+        DistributionConfig:
+          Enabled: true
+          HttpVersion: http2
+          DefaultCacheBehavior:
+            TargetOriginId: media
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            CachedMethods: [GET, HEAD]
+            ForwardedValues:
+              QueryString: false
+              Cookies: { Forward: none }
+          Origins:
+            - Id: media
+              DomainName: { Fn::GetAtt: [MediaBucket, RegionalDomainName] }
+              S3OriginConfig: {}
+              OriginAccessControlId: { Ref: MediaOriginAccessControl }
+
+    MediaBucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        Bucket: { Ref: MediaBucket }
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Sid: AllowCloudFrontRead
+              Effect: Allow
+              Principal: { Service: cloudfront.amazonaws.com }
+              Action: s3:GetObject
+              Resource:
+                Fn::Sub: ${MediaBucket.Arn}/*
+              Condition:
+                StringEquals:
+                  AWS:SourceArn:
+                    Fn::Sub: arn:aws:cloudfront::${AWS::AccountId}:distribution/${MediaDistribution}
+
+    UserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: ${self:service}-${sls:stage}-users
+        AutoVerifiedAttributes: [email]
+        UsernameAttributes: [email]
+        Policies:
+          PasswordPolicy:
+            MinimumLength: 12
+            RequireLowercase: true
+            RequireNumbers: true
+            RequireSymbols: true
+            RequireUppercase: true
+        AccountRecoverySetting:
+          RecoveryMechanisms:
+            - Name: verified_email
+              Priority: 1
+        Schema:
+          - Name: name
+            Mutable: true
+            Required: false
+            AttributeDataType: String
+
+    UserPoolClient:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        ClientName: ${self:service}-${sls:stage}-web
+        UserPoolId: { Ref: UserPool }
+        GenerateSecret: false
+        ExplicitAuthFlows:
+          - ALLOW_USER_SRP_AUTH
+          - ALLOW_USER_PASSWORD_AUTH
+          - ALLOW_REFRESH_TOKEN_AUTH
+        PreventUserExistenceErrors: ENABLED
+        AccessTokenValidity: 60
+        IdTokenValidity: 60
+        RefreshTokenValidity: 30
+        TokenValidityUnits:
+          AccessToken: minutes
+          IdToken: minutes
+          RefreshToken: days
+
+    SecurityAlarmTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: ${self:service}-${sls:stage}-security-alarms
+
+  Outputs:
+    HttpApiUrl:
+      Value:
+        Fn::Sub: https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com
+    WebSocketUrl:
+      Value:
+        Fn::Sub: wss://${WebsocketsApi}.execute-api.${AWS::Region}.amazonaws.com/${sls:stage}
+    UserPoolId:
+      Value: { Ref: UserPool }
+    UserPoolClientId:
+      Value: { Ref: UserPoolClient }
+    MediaCloudFrontDomain:
+      Value: { Fn::GetAtt: [MediaDistribution, DomainName] }

@@ -1,0 +1,23 @@
+{
+  "name": "@chat-platform/backend",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "lint": "node --check src/shared/aws.js && node --check src/shared/auth.js && node --check src/shared/realtime.js && node --check src/shared/http.js && node --check src/handlers/connect.js && node --check src/handlers/disconnect.js && node --check src/handlers/message.js && node --check src/handlers/rooms.js && node --check src/handlers/media.js && node --check src/handlers/ai.js && node --check src/handlers/users.js && node --check src/handlers/maintenance.js",
+    "test": "node --test",
+    "validate": "npm run lint"
+  },
+  "dependencies": {
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.600.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.600.0",
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/client-s3": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "@aws-sdk/s3-request-presigner": "^3.600.0",
+    "aws-jwt-verify": "^4.0.1",
+    "nanoid": "^5.0.7",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {}
+}

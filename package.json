@@ -1,0 +1,24 @@
+{
+  "name": "aws-serverless-realtime-chat-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Production-grade AWS serverless realtime chat platform.",
+  "scripts": {
+    "install:all": "npm install --workspaces",
+    "build": "npm run build --workspace frontend",
+    "lint": "npm run lint --workspace frontend && npm run lint --workspace backend",
+    "test": "npm run test --workspace frontend && npm run test --workspace backend",
+    "validate": "npm run validate --workspace backend && npm run build --workspace frontend",
+    "deploy": "cd infrastructure && serverless deploy",
+    "remove": "cd infrastructure && serverless remove"
+  },
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "devDependencies": {
+    "serverless": "^3.39.0",
+    "serverless-esbuild": "^1.52.1",
+    "serverless-iam-roles-per-function": "^3.2.0"
+  }
+}

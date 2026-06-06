@@ -1,0 +1,8 @@
+node_modules/
+frontend/dist/
+.serverless/
+.esbuild/
+.env
+frontend/.env
+npm-debug.log*
+.DS_Store
