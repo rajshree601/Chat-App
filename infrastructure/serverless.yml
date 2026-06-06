@@ -534,6 +534,75 @@ resources:
                   AWS:SourceArn:
                     Fn::Sub: arn:aws:cloudfront::${AWS::AccountId}:distribution/${MediaDistribution}
 
+    FrontendBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+
+    FrontendOriginAccessControl:
+      Type: AWS::CloudFront::OriginAccessControl
+      Properties:
+        OriginAccessControlConfig:
+          Name: ${self:service}-${sls:stage}-frontend-oac
+          OriginAccessControlOriginType: s3
+          SigningBehavior: always
+          SigningProtocol: sigv4
+
+    FrontendDistribution:
+      Type: AWS::CloudFront::Distribution
+      Properties:
+        DistributionConfig:
+          Enabled: true
+          HttpVersion: http2
+          DefaultRootObject: index.html
+          CustomErrorResponses:
+            - ErrorCode: 403
+              ResponseCode: 200
+              ResponsePagePath: /index.html
+            - ErrorCode: 404
+              ResponseCode: 200
+              ResponsePagePath: /index.html
+          DefaultCacheBehavior:
+            TargetOriginId: frontend
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            ForwardedValues:
+              QueryString: false
+              Cookies: { Forward: none }
+          Origins:
+            - Id: frontend
+              DomainName: { Fn::GetAtt: [FrontendBucket, RegionalDomainName] }
+              S3OriginConfig: {}
+              OriginAccessControlId: { Ref: FrontendOriginAccessControl }
+
+    FrontendBucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        Bucket: { Ref: FrontendBucket }
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Sid: AllowCloudFrontRead
+              Effect: Allow
+              Principal: { Service: cloudfront.amazonaws.com }
+              Action: s3:GetObject
+              Resource:
+                Fn::Sub: ${FrontendBucket.Arn}/*
+              Condition:
+                StringEquals:
+                  AWS:SourceArn:
+                    Fn::Sub: arn:aws:cloudfront::${AWS::AccountId}:distribution/${FrontendDistribution}
+
     UserPool:
       Type: AWS::Cognito::UserPool
       Properties:
@@ -594,3 +663,10 @@ resources:
       Value: { Ref: UserPoolClient }
     MediaCloudFrontDomain:
       Value: { Fn::GetAtt: [MediaDistribution, DomainName] }
+    FrontendBucketName:
+      Value: { Ref: FrontendBucket }
+    FrontendDistributionId:
+      Value: { Ref: FrontendDistribution }
+    FrontendUrl:
+      Value:
+        Fn::Sub: https://${FrontendDistribution.DomainName}

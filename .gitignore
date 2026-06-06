@@ -4,5 +4,6 @@ frontend/dist/
 .esbuild/
 .env
 frontend/.env
+frontend/.env.production
 npm-debug.log*
 .DS_Store

@@ -13,3 +13,7 @@ try {
 finally {
   Pop-Location
 }
+
+$env:STAGE = $Stage
+$env:AWS_REGION = $Region
+node scripts/deploy-frontend.mjs $Stage $Region
