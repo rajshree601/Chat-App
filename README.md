@@ -96,7 +96,3 @@ scripts/         Deployment helper scripts
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the architecture diagram, data model, scaling notes, and security model.
-
-## Screenshots
-
-Place production screenshots in `docs/screenshots/` after first deployment.
